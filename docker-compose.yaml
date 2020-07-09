@@ -1,0 +1,18 @@
+---
+version: "2.3"
+services:
+  tpu:
+    build: .
+    container_name: tpu
+    hostname: miner
+    privileged: true
+    environment:
+      - TZ=Europe/Copenhagen
+      - DISPLAY=127.0.0.1:0
+    restart: unless-stopped
+    volumes:
+      - /dev:/dev
+      - /mnt/local/composer/coral/code:/home/code
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /home/user/.Xauthority:/home/.Xauthority
+    network_mode: "host"

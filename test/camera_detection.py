@@ -3,7 +3,6 @@
 
     This code has been modified to post detections on
     an mqtt bus
-
 """
 import argparse
 import time
@@ -12,6 +11,8 @@ import signal
 import numpy as np
 import os
 import datetime
+import requests
+from io import BytesIO
 
 import edgetpu.detection.engine
 import cv2
@@ -20,22 +21,22 @@ from mqtt_client import mqtt_client
 
 # The local (hidden) configuration
 # Contains e.g.
-#IM_WIDTH = 704
-#IM_HEIGHT = 576
 #SLEEP_TIMER = 5
-#mqtt_topic_camera = "a/camera/topic/"
-#mqtt_topic_motion = "a/motion/topic/"
-#mqtt_topic_tts = "a/tts/topic/"
 #camera_list = [
 #   {
 #       "name": "Camera name",
 #       "camera_url": "rtsp://user:pass@1.2.3.4:554/Streaming/Channels/102",
-#       "width": IM_WIDTH,
-#       "height": IM_HEIGHT,
-#       "mqtt_topic_camera": mqtt_topic_camera,
-#       "mqtt_topic_motion": mqtt_topic_motion,
-#       "mqtt_topic_tts": mqtt_topic_tts,
+#       "camera_snapshot": "http://user:pass@1.2.3.4:554/snapshot.cgi",
+#       "width": WIDTH,
+#       "height": HEIGHT,
+#       "mqtt_topic_camera": "a/camera/topic"
+#       "mqtt_topic_motion": "a/motion/topic"
+#       "mqtt_topic_tts": "a/tts/topic",
 #   }]
+#tpu_config = {
+#   "model": "ssd_mobilenet_v2_coco_quant_postprocess_edgetpu.tflite",
+#   "labels": "coco_labels.txt"
+#}
 #   mqtt_config = {
 #       "name": "name",
 #       "host": "mqtt.local",
@@ -56,23 +57,26 @@ def sig_handler(signum, frame):
 
 class Camera:
     camera = None
-    camera_url = ""
-    camera_width = 0
-    camera_height = 0
+    rtsp_url = ""
+    http_snapshot = ""
+    img_width = 0
+    img_height = 0
     img = None
 
     def __init__(self,
                  camera_url,
+                 camera_snapshot,
                  camera_width,
                  camera_height):
-        self.camera_url = camera_url
-        self.camera_width = camera_width
-        self.camera_height = camera_height
+        self.rtsp_url = camera_url
+        self.http_snapshot = camera_snapshot
+        self.width = camera_width
+        self.height = camera_height
 
     def open(self):
-        self.camera = cv2.VideoCapture(self.camera_url)
-        self.camera.set(3, self.camera_width)
-        self.camera.set(4, self.camera_height)
+        self.camera = cv2.VideoCapture(self.rtsp_url)
+        self.camera.set(3, self.width)
+        self.camera.set(4, self.height)
         self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 0)
         #self.camera.set(cv2.CV_CAP_PROP_FPS, 10)
         self.camera.set(cv2.CAP_PROP_POS_AVI_RATIO, 1)
@@ -95,6 +99,11 @@ class Camera:
 
     def get_png(self):
         return cv2.imencode('.png', self.img)[1].tostring()
+
+    def snapshot(self):
+        self.img = None
+        r = requests.get(self.http_snapshot)
+        self.img = Image.open(BytesIO(r.content))
 
 
 class Detector:
@@ -141,26 +150,16 @@ def main():
     print('Starting program')
     signal.signal(signal.SIGINT, sig_handler)
 
-    # The local path in docker
-    os.chdir('/home/code/test/')
-    # A model and labels
-    #model = 'data/model_result/mobilenet_ssd_v2_coco_quant_postprocess_edgetpu.tflite'
-    model = 'data/model_result/ssd_mobilenet_v2_coco_quant_postprocess_edgetpu.tflite'
-    label = 'data/model_result/coco_labels.txt'
-        
     # Read labels
-    with open(label, 'r') as f:
+    with open(tpu_config["labels"], 'r') as f:
         pairs = (l.strip().split(maxsplit=1) for l in f.readlines())
         labels = dict((int(k), v) for k, v in pairs)
 
     # Init Coral edge tpu
-    engine = edgetpu.detection.engine.DetectionEngine(model)
+    engine = edgetpu.detection.engine.DetectionEngine(tpu_config["model"])
 
+    # Connect to mqtt server
     try:
-        # Setup the detector
-        detector = Detector(engine, IM_HEIGHT, labels)
-
-        # Connect to mqtt server
         # Will throw on mqtt host error
         mqtt = mqtt_client(mqtt_config)
     except:
@@ -169,12 +168,18 @@ def main():
     index = 0
     for camera_dict in camera_list:
         try:
+            print('Setup camera: %s' % camera_dict["name"])
+
             camera_dict["mqtt_topic_camera"] += str(index)
             camera_dict["mqtt_topic_motion"] += str(index)
             camera_dict["mqtt_topic_tts"] += str(index)
 
-            print('Open camera: %s' % camera_dict["name"])
-            camera = Camera(camera_dict["camera_url"], camera_dict["width"], camera_dict["height"])
+            # To get the text correctly placed in the detection,
+            # create One detection per camera
+            # Setup the detector
+            camera_dict["detector"] = Detector(engine, camera_dict["height"], labels)
+
+            camera = Camera(camera_dict["camera_url"], camera_dict["camera_snapshot"], camera_dict["width"], camera_dict["height"])
             camera_dict["camera"] = camera
             camera.open()
         except:
@@ -186,6 +191,7 @@ def main():
             if not do_loop:
                 break
             camera = camera_dict["camera"]
+            detector = camera_dict["detector"]
             if camera.is_open():
                 print('\nProcessing camera: %s' % (camera_dict["name"]))
                 # Hack to empty any queued images, this code only wants the
@@ -205,6 +211,10 @@ def main():
                         camera.close()
                         continue
 
+                    #print('Snapshot: %s' % (camera_dict["name"]))
+                    #camera.snapshot()
+
+                    print('Detect : %s' % (camera_dict["name"]))
                     detector.process_img(start_ms, camera.get_img())
                 
                     #cv2.imshow('Detected Objects', camera.get_img())
