@@ -11,8 +11,8 @@ services:
       - DISPLAY=127.0.0.1:0
     restart: unless-stopped
     volumes:
+      - /home/user/coral/code:/home/code
       - /dev:/dev
-      - /mnt/local/composer/coral/code:/home/code
       - /tmp/.X11-unix:/tmp/.X11-unix
       - /home/user/.Xauthority:/home/.Xauthority
     network_mode: "host"

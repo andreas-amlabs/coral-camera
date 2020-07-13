@@ -8,9 +8,9 @@ VOLUME /data
 EXPOSE 8888
 RUN cd ~
 
-# Ubuntu
 RUN apt-get update
 RUN apt-get install -y software-properties-common curl python3-pip
+RUN apt-get install -y python3-requests python3-urllib3
 
 RUN apt-get install -y build-essential libpython3-dev  libusb-1.0-0-dev vim feh x11-apps apt-utils
 
@@ -66,7 +66,5 @@ RUN pip3 install paho-mqtt
 RUN cp /usr/share/edgetpu/examples/models/* /home/tflite/python/examples/classification/models/.
 RUN cp /usr/share/edgetpu/examples/images/* /home/tflite/python/examples/classification/images/.
 
-#ENTRYPOINT ["sh code/run.sh"]
-#ENTRYPOINT ["bash -c 'echo ""$PATH""'"]
-#CMD ["bash", "-c", "ls -la code"]
-CMD ["bash", "-c", "sh code/run.sh"]
+RUN mkdir detection
+CMD ["bash", "-c", "sh ./detection/run.sh"]
