@@ -32,36 +32,11 @@ class mqtt_client:
         self.client.connect(self.config["host"])
         self.client.loop_start()
 
-    def no_motion(self):
+    def publish(self, mqtt_topic, payload):
         if self.client == None:
             return
-        debug("publishing motion OFF");
-        self.client.publish(self.mqtt_motion, '{"on":"OFF"}')
-
-    def publish(self, mqtt_topic, detection_type, likelihood):
-        if self.client == None:
-            return
-        debug("Publishing ", detection_type, likelihood)
-
-        #if detection_type not in self.detects:
-            #self.detects[detection_type] = 0
-        #if self.detects[detection_type] + 10.0 < time.time():
-            #self.detects[detection_type] = time.time()
-            #debug("publish TTS")
-            #self.client.publish(self.mqtt_tts, "There is a " + detection_type + " in the " + self.name)
-            #debug("publish Motion")
-            #self.client.publish(mqtt_topic, '{"on":"ON", "type":"' + detection_type + '"}')
-            #if self.timer is not None:
-                #self.timer.cancel()
-            #debug("Setting up timer for 15 seconds")
-            #self.timer = threading.Timer(15, self.no_motion)
-            #self.timer.start()
-
-    def publish(self, mqtt_topic, image):
-        if self.client == None:
-            return
-        debug("Publishing image.")
-        self.client.publish(mqtt_topic, image)
+        debug("Publishing payload.")
+        self.client.publish(mqtt_topic, payload)
 
     def __del__(self):
         if self.client == None:
