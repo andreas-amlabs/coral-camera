@@ -27,16 +27,18 @@ from Detector import *
 # The local (hidden) configuration
 # Contains e.g.
 #SLEEP_TIMER = 5
-#camera_list = [
+#cameras = {
+#   "Camera name":
 #   {
-#       "name": "Camera name",
+#       "model": MODEL,
+#       "enabled": True,
 #       "camera_url": "rtsp://user:pass@1.2.3.4:554/Streaming/Channels/102",
 #       "camera_snapshot": "http://user:pass@1.2.3.4:554/snapshot.cgi",
 #       "width": WIDTH,
 #       "height": HEIGHT,
 #       "mqtt_topic_image": "a/camera/topic"
 #       "mqtt_topic_detection": "a/detection/topic"
-#   }]
+#   }}
 #tpu_config = {
 #   "confidence": 0.50,
 #   "model": "ssd_mobilenet_v2_coco_quant_postprocess_edgetpu.tflite",
@@ -60,40 +62,46 @@ def sig_handler(signum, frame):
     do_loop = False
 
 
-def setup_all(camera_list, engines, labels):
-    index = 0
-    for camera_dict in camera_list:
+def setup_all(cameras, engines, labels):
+    disabled_list = []
+    for name, settings in cameras.items():
         try:
-            print('Setup camera: %s' % camera_dict["name"])
+            print('Setup camera: %s' % name)
+            if not settings["enabled"]:
+                print('Camera: %s is disabled' % name)
+                disabled_list.append(name)
+                continue
 
-            camera_dict["mqtt_topic_image"] += camera_dict["name"]
-            camera_dict["mqtt_topic_detection"] += camera_dict["name"]
+            settings["mqtt_topic_image"] += name
+            settings["mqtt_topic_detection"] += name
 
             # To get the text correctly placed in the detection,
             # create One detection per camera
             # Setup the detector
-            camera_dict["detector"] = Detector(engines[camera_dict["model"]], camera_dict["height"], labels)
+            settings["detector"] = Detector(engines[settings["model"]], settings["height"], labels)
 
-            camera = Camera(camera_dict["camera_url"], camera_dict["camera_snapshot"], camera_dict["width"], camera_dict["height"])
-            camera_dict["camera"] = camera
+            camera = Camera(settings["camera_url"], settings["camera_snapshot"], settings["width"], settings["height"])
+            settings["camera"] = camera
             camera.open()
         except:
-            print('Setup camera: %s FAILED' % camera_dict["name"])
+            print('Setup camera: %s FAILED' % name)
             camera.close()
             pass # Close all ....
-        index += 1
+
+    for key in disabled_list:
+        del cameras[key]
 
 
-def grab_all(camera_list):
+def grab_all(cameras):
     global do_loop
     print('\nGrabbing cameras')
-    for camera_dict in camera_list:
+    for name, settings in cameras.items():
         if not do_loop:
             break
-        camera = camera_dict["camera"]
-        detector = camera_dict["detector"]
+        camera = settings["camera"]
+        detector = settings["detector"]
         if camera.is_open():
-            print('Grabbing camera: %s' % (camera_dict["name"]))
+            print('Grabbing camera: %s' % name)
             try:
                 camera.grab()
             except Exception as e:
@@ -102,42 +110,42 @@ def grab_all(camera_list):
                 continue
 
 
-def process_all(camera_list, mqtt):
+def process_all(cameras, mqtt):
     global do_loop
-    for camera_dict in camera_list:
+    for name, settings in cameras.items():
         if not do_loop:
             break
-        camera = camera_dict["camera"]
-        detector = camera_dict["detector"]
+        camera = settings["camera"]
+        detector = settings["detector"]
         if camera.is_open():
-            print('\nProcessing camera: %s' % (camera_dict["name"]))
+            print('\nProcessing camera: %s' % name)
             # Pull an image, classify it and post on mqtt bus
             try:
                 start_ms = time.time()
                 if camera.retrieve() == False:
-                    print('Failed to get image from camera: %s %s' % (camera_dict["name"], camera_dict["camera_url"]))
+                    print('Failed to get image from camera: %s %s' % (name, settings["camera_url"]))
                     camera.close()
                     continue
 
-                #print('Snapshot: %s' % (camera_dict["name"]))
+                #print('Snapshot: %s' % name)
                 #camera.snapshot()
 
-                print('Detect : %s' % (camera_dict["name"]))
+                print('Detect : %s' % name)
                 detections = detector.process_img(start_ms, tpu_config["confidence"], camera.get_img())
 
                 # Publish all detections (like "person, 81%")
                 for detection in detections:
                     print('Detected: %s' % str(detection))
-                    mqtt.publish(camera_dict["mqtt_topic_detection"], detection)
+                    mqtt.publish(settings["mqtt_topic_detection"], detection)
 
                 #cv2.imshow('Detected Objects', camera.get_img())
-                mqtt.publish(camera_dict["mqtt_topic_image"], camera.get_png())
+                mqtt.publish(settings["mqtt_topic_image"], camera.get_png())
 
             except Exception as e:
                 print('Exception: %s' % (e))
                 continue
         else:
-            print('Reopen camera: %s %s' % (camera_dict["name"], camera_dict["camera_url"]))
+            print('Reopen camera: %s %s' % (name, settings["camera_url"]))
             camera.open()
 
 
@@ -168,15 +176,15 @@ def main():
     except:
         return
 
-    setup_all(camera_list, engines, labels)
+    setup_all(cameras, engines, labels)
 
     while do_loop:
-        grab_all(camera_list)
-        process_all(camera_list, mqtt)
+        grab_all(cameras)
+        process_all(cameras, mqtt)
         #if SLEEP_TIMER:
             #time.sleep(SLEEP_TIMER)
 
-    for camera_dict in camera_list:
+    for settings in cameras:
         try:
             camera = camera_dict["camera"]
             camera.close()
