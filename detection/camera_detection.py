@@ -18,6 +18,8 @@ import edgetpu.detection.engine
 import cv2
 from PIL import Image
 from mqtt_client import mqtt_client
+from datetime import datetime
+
 
 # The local (hidden) configuration
 # Contains e.g.
@@ -29,8 +31,8 @@ from mqtt_client import mqtt_client
 #       "camera_snapshot": "http://user:pass@1.2.3.4:554/snapshot.cgi",
 #       "width": WIDTH,
 #       "height": HEIGHT,
-#       "mqtt_topic_camera": "a/camera/topic"
-#       "mqtt_topic_motion": "a/motion/topic"
+#       "mqtt_topic_image": "a/camera/topic"
+#       "mqtt_topic_detection": "a/detection/topic"
 #   }]
 #tpu_config = {
 #   "confidence": 0.50,
@@ -88,7 +90,11 @@ class Camera:
         return self.camera.isOpened()
 
     def grab(self):
-        return self.grab()
+        return self.camera.grab()
+
+    def retrieve(self):
+        self.ret, self.img = self.camera.retrieve()
+        return self.ret
 
     def read(self):
         self.ret, self.img = self.camera.read()
@@ -149,18 +155,106 @@ class Detector:
         return detections
 
 
+def setup_all(camera_list, engines, labels):
+    index = 0
+    for camera_dict in camera_list:
+        try:
+            print('Setup camera: %s' % camera_dict["name"])
+
+            camera_dict["mqtt_topic_image"] += camera_dict["name"]
+            camera_dict["mqtt_topic_detection"] += camera_dict["name"]
+
+            # To get the text correctly placed in the detection,
+            # create One detection per camera
+            # Setup the detector
+            camera_dict["detector"] = Detector(engines[camera_dict["model"]], camera_dict["height"], labels)
+
+            camera = Camera(camera_dict["camera_url"], camera_dict["camera_snapshot"], camera_dict["width"], camera_dict["height"])
+            camera_dict["camera"] = camera
+            camera.open()
+        except:
+            print('Setup camera: %s FAILED' % camera_dict["name"])
+            camera.close()
+            pass # Close all ....
+        index += 1
+
+
+def grab_all(camera_list):
+    global do_loop
+    print('\nGrabbing cameras')
+    for camera_dict in camera_list:
+        if not do_loop:
+            break
+        camera = camera_dict["camera"]
+        detector = camera_dict["detector"]
+        if camera.is_open():
+            print('Grabbing camera: %s' % (camera_dict["name"]))
+            try:
+                camera.grab()
+            except Exception as e:
+                print('Camera grab exception: %s' % (e))
+                camera.close()
+                continue
+
+
+def process_all(camera_list, mqtt):
+    global do_loop
+    for camera_dict in camera_list:
+        if not do_loop:
+            break
+        camera = camera_dict["camera"]
+        detector = camera_dict["detector"]
+        if camera.is_open():
+            print('\nProcessing camera: %s' % (camera_dict["name"]))
+            # Pull an image, classify it and post on mqtt bus
+            try:
+                start_ms = time.time()
+                if camera.retrieve() == False:
+                    print('Failed to get image from camera: %s %s' % (camera_dict["name"], camera_dict["camera_url"]))
+                    camera.close()
+                    continue
+
+                #print('Snapshot: %s' % (camera_dict["name"]))
+                #camera.snapshot()
+
+                print('Detect : %s' % (camera_dict["name"]))
+                detections = detector.process_img(start_ms, camera.get_img())
+
+                # Publish all detections (like "person, 81%")
+                for detection in detections:
+                    print('Detected: %s' % str(detection))
+                    mqtt.publish(camera_dict["mqtt_topic_detection"], detection)
+
+                #cv2.imshow('Detected Objects', camera.get_img())
+                mqtt.publish(camera_dict["mqtt_topic_image"], camera.get_png())
+
+            except Exception as e:
+                print('Exception: %s' % (e))
+                continue
+        else:
+            print('Reopen camera: %s %s' % (camera_dict["name"], camera_dict["camera_url"]))
+            camera.open()
+
+
 def main():
     global do_loop
-    print('Starting program')
+    #print('Starting program')
+    print('Starting pr')
     signal.signal(signal.SIGINT, sig_handler)
 
-    # Read labels
-    with open(tpu_config["labels"], 'r') as f:
-        pairs = (l.strip().split(maxsplit=1) for l in f.readlines())
-        labels = dict((int(k), v) for k, v in pairs)
 
     # Init Coral edge tpu
-    engine = edgetpu.detection.engine.DetectionEngine(tpu_config["model"])
+    engines = {}
+    print('Load engines')
+    for name, item in tpu_config["models"].items():
+        print("Load engine name:%s model:%s" % (name, item["model"]))
+        engines[name] = edgetpu.detection.engine.DetectionEngine(item["model"])
+
+        # Read labels
+        print("Read labels %s" % (item["labels"]))
+        with open(item["labels"], 'r') as f:
+            pairs = (l.strip().split(maxsplit=1) for l in f.readlines())
+            labels = dict((int(k), v) for k, v in pairs)
 
     # Connect to mqtt server
     try:
@@ -169,85 +263,20 @@ def main():
     except:
         return
 
-    index = 0
-    for camera_dict in camera_list:
-        try:
-            print('Setup camera: %s' % camera_dict["name"])
-
-            camera_dict["mqtt_topic_camera"] += str(index)
-            camera_dict["mqtt_topic_motion"] += str(index)
-
-            # To get the text correctly placed in the detection,
-            # create One detection per camera
-            # Setup the detector
-            camera_dict["detector"] = Detector(engine, camera_dict["height"], labels)
-
-            camera = Camera(camera_dict["camera_url"], camera_dict["camera_snapshot"], camera_dict["width"], camera_dict["height"])
-            camera_dict["camera"] = camera
-            camera.open()
-        except:
-           pass # Close all ....
-        index += 1
+    setup_all(camera_list, engines, labels)
 
     while do_loop:
-        for camera_dict in camera_list:
-            if not do_loop:
-                break
-            camera = camera_dict["camera"]
-            detector = camera_dict["detector"]
-            if camera.is_open():
-                print('\nProcessing camera: %s' % (camera_dict["name"]))
-                # Hack to empty any queued images, this code only wants the
-                # single latest image
-                try:
-                    for i in range(1):
-                        camera.grab()
-                except Exception as e:
-                    print('Exception: %s' % (e))
-                    pass
-
-                # Pull an image, classify it and post on mqtt bus
-                try:
-                    start_ms = time.time()
-                    if camera.read() == False:
-                        print('Failed to get image from camera: %s %s' % (camera_dict["name"], camera_dict["camera_url"]))
-                        camera.close()
-                        continue
-
-                    #print('Snapshot: %s' % (camera_dict["name"]))
-                    #camera.snapshot()
-
-                    print('Detect : %s' % (camera_dict["name"]))
-                    detections = detector.process_img(start_ms, camera.get_img())
-
-                    # Publish all detections (like "person, 81%")
-                    for detection in detections:
-                        print('Detection : %s' % str(detection))
-                        mqtt.publish(camera_dict["mqtt_topic_motion"], detection)
-                
-                    #cv2.imshow('Detected Objects', camera.get_img())
-                    mqtt.publish(camera_dict["mqtt_topic_camera"], camera.get_png())
-
-                except Exception as e:
-                    print('Exception: %s' % (e))
-                    continue
-            else:
-                print('Reopen camera: %s %s' % (camera_dict["name"], camera_dict["camera_url"]))
-                camera.open()
-            # Normally do no have a window!
-            #if cv2.waitKey(1000) & 0xFF == ord('q'):
-                #do_loop = False
-
-        if do_loop:
-            # Dont stress the MQTT bus
-            time.sleep(SLEEP_TIMER)
+        grab_all(camera_list)
+        process_all(camera_list, mqtt)
+        #if SLEEP_TIMER:
+            #time.sleep(SLEEP_TIMER)
 
     for camera_dict in camera_list:
         try:
             camera = camera_dict["camera"]
             camera.close()
         except:
-           pass # Close all ....
+           pass
 
     cv2.destroyAllWindows()
     print('End of program')

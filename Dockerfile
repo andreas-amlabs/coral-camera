@@ -11,6 +11,7 @@ RUN cd ~
 RUN apt-get update
 RUN apt-get install -y software-properties-common curl python3-pip
 RUN apt-get install -y python3-requests python3-urllib3
+RUN apt-get install -y bash
 
 RUN apt-get install -y build-essential libpython3-dev  libusb-1.0-0-dev vim feh x11-apps apt-utils
 
