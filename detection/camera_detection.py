@@ -20,6 +20,9 @@ from PIL import Image
 from mqtt_client import mqtt_client
 from datetime import datetime
 
+from Camera import *
+from Detector import *
+
 
 # The local (hidden) configuration
 # Contains e.g.
@@ -55,104 +58,6 @@ do_loop = True
 def sig_handler(signum, frame):
     global do_loop
     do_loop = False
-
-
-class Camera:
-    camera = None
-    rtsp_url = ""
-    http_snapshot = ""
-    img_width = 0
-    img_height = 0
-    img = None
-
-    def __init__(self,
-                 camera_url,
-                 camera_snapshot,
-                 camera_width,
-                 camera_height):
-        self.rtsp_url = camera_url
-        self.http_snapshot = camera_snapshot
-        self.width = camera_width
-        self.height = camera_height
-
-    def open(self):
-        self.camera = cv2.VideoCapture(self.rtsp_url)
-        self.camera.set(3, self.width)
-        self.camera.set(4, self.height)
-        self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 0)
-        #self.camera.set(cv2.CV_CAP_PROP_FPS, 10)
-        self.camera.set(cv2.CAP_PROP_POS_AVI_RATIO, 1)
-
-    def close(self):
-        self.camera.release()
-
-    def is_open(self):
-        return self.camera.isOpened()
-
-    def grab(self):
-        return self.camera.grab()
-
-    def retrieve(self):
-        self.ret, self.img = self.camera.retrieve()
-        return self.ret
-
-    def read(self):
-        self.ret, self.img = self.camera.read()
-        return self.ret
-
-    def get_img(self):
-        return self.img
-
-    def get_png(self):
-        return cv2.imencode('.png', self.img)[1].tostring()
-
-    def snapshot(self):
-        self.img = None
-        r = requests.get(self.http_snapshot)
-        self.img = Image.open(BytesIO(r.content))
-
-
-class Detector:
-    def __init__(self, engine, height, labels):
-        self.engine = engine
-        self.elapsed_ms = 0
-        self.font = cv2.FONT_HERSHEY_SIMPLEX
-        self.bottomLeftCornerOfText = (10, height-10)
-        self.fontScale = 1
-        self.fontColor = (255, 255, 255)  # white
-        self.boxColor = (0, 0, 255)   # RED?
-        self.boxLineWidth = 1
-        self.lineType = 2
-        self.labels = labels
-    
-    def process_img(self, start_ms, img):
-        detections = []
-        input = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # convert to RGB color space
-        img_pil = Image.fromarray(input)
-        results = self.engine.detect_with_image(img_pil, threshold=tpu_config["confidence"], keep_aspect_ratio=True, relative_coord=False, top_k=5)
-        end_tf_ms = time.time()
-        elapsed_tf_ms = end_tf_ms - start_ms
-                
-        for obj in results:
-            #print("%s, %.0f%% %.2fms" % (self.labels[obj.label_id], obj.score *100, elapsed_tf_ms * 1000))
-            box = obj.bounding_box
-            coord_top_left = (int(box[0][0]), int(box[0][1]))
-            coord_bottom_right = (int(box[1][0]), int(box[1][1]))
-            cv2.rectangle(img, coord_top_left, coord_bottom_right, self.boxColor, self.boxLineWidth)
-            annotate_text = "%s, %.0f%%" % (self.labels[obj.label_id], obj.score * 100)
-            detections.append(annotate_text)
-            coord_top_left = (coord_top_left[0], coord_top_left[1]+15)
-            cv2.putText(img, annotate_text, coord_top_left, self.font, self.fontScale, self.boxColor, self.lineType )
-
-        # Print Frame rate info
-        self.elapsed_ms = time.time() - start_ms
-        annotate_text = "%.2f FPS, %.2fms total, %.2fms in tf " % (1.0 / self.elapsed_ms, self.elapsed_ms*1000, elapsed_tf_ms*1000)
-        #print('%s: %s' % (datetime.datetime.now(), annotate_text))
-        cv2.putText(img, annotate_text, self.bottomLeftCornerOfText, self.font, self.fontScale, self.fontColor, self.lineType)
-
-        # Return the list of detections so that they
-        # may eg. be published on mqtt bus
-        return detections
 
 
 def setup_all(camera_list, engines, labels):
@@ -218,7 +123,7 @@ def process_all(camera_list, mqtt):
                 #camera.snapshot()
 
                 print('Detect : %s' % (camera_dict["name"]))
-                detections = detector.process_img(start_ms, camera.get_img())
+                detections = detector.process_img(start_ms, tpu_config["confidence"], camera.get_img())
 
                 # Publish all detections (like "person, 81%")
                 for detection in detections:
