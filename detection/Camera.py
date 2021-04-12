@@ -27,8 +27,8 @@ class Camera:
 
     def open(self):
         self.camera = cv2.VideoCapture(self.rtsp_url)
-        self.camera.set(3, self.width)
-        self.camera.set(4, self.height)
+        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 0)
         #self.camera.set(cv2.CV_CAP_PROP_FPS, 10)
         self.camera.set(cv2.CAP_PROP_POS_AVI_RATIO, 1)
