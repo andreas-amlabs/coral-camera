@@ -23,6 +23,8 @@ class Detector:
     
     def process_img(self, start_ms, threshold, img):
         detections = []
+        if img is None:
+            return detections
         input = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # convert to RGB color space
         img_pil = Image.fromarray(input)
         results = self.engine.detect_with_image(img_pil, threshold, keep_aspect_ratio=True, relative_coord=False, top_k=5)

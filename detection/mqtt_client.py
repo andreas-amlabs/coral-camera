@@ -32,8 +32,12 @@ class mqtt_client:
         self.client.connect(self.config["host"])
         self.client.loop_start()
 
+    def disconnect(self):
+        self.client.loop_stop()
+        self.client.disconnect()
+
     def publish(self, mqtt_topic, payload):
-        if self.client == None:
+        if self.client == None or payload == None:
             return
         debug("Publishing payload.")
         self.client.publish(mqtt_topic, payload)

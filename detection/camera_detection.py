@@ -60,11 +60,13 @@ do_loop = True
 def sig_handler(signum, frame):
     global do_loop
     do_loop = False
+    print('Sigaction!')
 
 
-def setup_all(cameras, engines, labels):
+def camera_setup_all(cameras, engines, labels):
     disabled_list = []
     for name, settings in cameras.items():
+        camera = None
         try:
             print('Setup camera: %s' % name)
             if not settings["enabled"]:
@@ -80,58 +82,51 @@ def setup_all(cameras, engines, labels):
             # Setup the detector
             settings["detector"] = Detector(engines[settings["model"]], settings["height"], labels)
 
-            camera = Camera(settings["camera_url"], settings["camera_snapshot"], settings["width"], settings["height"])
-            settings["camera"] = camera
+            camera = Camera(name, settings["camera_url"], settings["camera_snapshot"], settings["width"], settings["height"])
             camera.open()
+            settings["camera"] = camera
         except:
             print('Setup camera: %s FAILED' % name)
-            camera.close()
+            if camera:
+                camera.close()
             pass # Close all ....
 
     for key in disabled_list:
         del cameras[key]
 
 
-def grab_all(cameras):
-    global do_loop
-    print('\nGrabbing cameras')
+def camera_start_all(cameras):
     for name, settings in cameras.items():
-        if not do_loop:
-            break
         camera = settings["camera"]
-        detector = settings["detector"]
         if camera.is_open():
-            print('Grabbing camera: %s' % name)
             try:
-                camera.grab()
+                print('Try start camera: %s' % camera.camera_name)
+                camera.start()
             except Exception as e:
-                print('Camera grab exception: %s' % (e))
+                print('Camera start exception: %s' % (e))
                 camera.close()
-                continue
 
-
-def process_all(cameras, mqtt):
-    global do_loop
     for name, settings in cameras.items():
-        if not do_loop:
-            break
+        camera = settings["camera"]
+        if camera.is_alive():
+            print('Alive: %s' % camera.camera_name)
+        else:
+            print('NOT Alive: %s' % camera.camera_name)
+
+
+def camera_process_all(cameras, mqtt):
+    for name, settings in cameras.items():
         camera = settings["camera"]
         detector = settings["detector"]
         if camera.is_open():
             print('\nProcessing camera: %s' % name)
-            # Pull an image, classify it and post on mqtt bus
+            # Classify the latest camera image and post on mqtt bus
             try:
                 start_ms = time.time()
-                if camera.retrieve() == False:
-                    print('Failed to get image from camera: %s %s' % (name, settings["camera_url"]))
-                    camera.close()
-                    continue
-
-                #print('Snapshot: %s' % name)
-                #camera.snapshot()
 
                 print('Detect : %s' % name)
-                detections = detector.process_img(start_ms, tpu_config["confidence"], camera.get_img())
+                img = camera.get_img()
+                detections = detector.process_img(start_ms, tpu_config["confidence"], img)
 
                 # Publish all detections (like "person, 81%")
                 for detection in detections:
@@ -139,7 +134,9 @@ def process_all(cameras, mqtt):
                     mqtt.publish(settings["mqtt_topic_detection"], detection)
 
                 #cv2.imshow('Detected Objects', camera.get_img())
-                mqtt.publish(settings["mqtt_topic_image"], camera.get_png())
+                png = camera.get_png()
+                if png is not None:
+                    mqtt.publish(settings["mqtt_topic_image"], png)
 
             except Exception as e:
                 print('Exception: %s' % (e))
@@ -151,9 +148,8 @@ def process_all(cameras, mqtt):
 
 def main():
     global do_loop
-    #print('Starting program')
-    print('Starting pr')
     signal.signal(signal.SIGINT, sig_handler)
+    print('Starting program')
 
 
     # Init Coral edge tpu
@@ -170,29 +166,51 @@ def main():
             labels = dict((int(k), v) for k, v in pairs)
 
     # Connect to mqtt server
+    print("Connect to mqtt")
     try:
         # Will throw on mqtt host error
         mqtt = mqtt_client(mqtt_config)
     except:
         return
 
-    setup_all(cameras, engines, labels)
+    print("Setup all cameras")
+    camera_setup_all(cameras, engines, labels)
 
+    # Start all camera threads
+    print("Start all cameras")
+    camera_start_all(cameras)
+
+    # Process images from the cameras
+    print("Process all cameras")
     while do_loop:
-        grab_all(cameras)
-        process_all(cameras, mqtt)
-        #if SLEEP_TIMER:
-            #time.sleep(SLEEP_TIMER)
+        # Pull latest camera image and do detection on it
+        camera_process_all(cameras, mqtt)
+        # Sleep to not flood the mqtt bus
+        if SLEEP_TIMER:
+            time.sleep(SLEEP_TIMER)
 
-    for settings in cameras:
+    print("Close all cameras")
+    for name, settings in cameras.items():
         try:
-            camera = camera_dict["camera"]
+            camera = settings["camera"]
             camera.close()
         except:
            pass
+    for name, settings in cameras.items():
+        try:
+            camera = settings["camera"]
+            camera.join()
+        except:
+           pass
 
-    cv2.destroyAllWindows()
+    print('Disconnect mqtt bus')
+    mqtt.disconnect()
+
+    #print('cv2 end')
+    #cv2.destroyAllWindows()
+
     print('End of program')
+    exit()
 
 if __name__ == '__main__':
     main()
